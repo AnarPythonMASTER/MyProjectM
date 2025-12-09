@@ -12,35 +12,35 @@ import os
 GDRIVE_URL = "https://drive.google.com/uc?export=download&confirm=1&id=1quysauOgFKTcRdxpKITBmMNUXH5L1bDE"
 
 #GDRIVE_URL = "https://drive.google.com/uc?export=download&id=1quysauOgFKTcRdxpKITBmMNUXH5L1bDE"
-DATA_DIR = Path(__file__).parent / "data"
+DATA_DIR = Path(__file__).parent / "dataset_cache"
 PARQUET_PATH = DATA_DIR / "cached_dataset.parquet"
 
-
 def ensure_data_exists():
-    """Ensures cached_dataset.parquet exists locally.
-       If missing (on Streamlit Cloud), download from Google Drive."""
+    """Ensures cached_dataset.parquet exists locally or downloads it."""
 
-    # SAFEST way to create directory on Streamlit Cloud
-    if not DATA_DIR.is_dir():
+    # Create folder safely
+    if not DATA_DIR.exists():
         try:
             os.makedirs(DATA_DIR, exist_ok=True)
         except Exception:
             pass
 
-    if PARQUET_PATH.exists():
+    # If file already exists → use cached version
+    if PARQUET_PATH.exists() and PARQUET_PATH.is_file():
         return PARQUET_PATH
 
     # Download from Google Drive
-    with st.spinner("Downloading cached dataset (56 MB) from Drive…"):
-        response = requests.get(GDRIVE_URL, stream=True, allow_redirects=True)
-        response.raise_for_status()
+    with st.spinner("Downloading cached dataset (56MB)…"):
+        r = requests.get(GDRIVE_URL, stream=True)
+        r.raise_for_status()
 
         with open(PARQUET_PATH, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
+            for chunk in r.iter_content(chunk_size=8 * 1024 * 1024):
                 if chunk:
                     f.write(chunk)
 
     return PARQUET_PATH
+
 
 
 
