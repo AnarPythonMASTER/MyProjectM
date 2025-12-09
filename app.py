@@ -9,8 +9,9 @@ import os
 # ==========================================
 # 1) ENSURE PARQUET DATA EXISTS (GOOGLE DRIVE FALLBACK)
 # ==========================================
+GDRIVE_URL = "https://drive.google.com/uc?export=download&confirm=1&id=1quysauOgFKTcRdxpKITBmMNUXH5L1bDE"
 
-GDRIVE_URL = "https://drive.google.com/uc?export=download&id=1quysauOgFKTcRdxpKITBmMNUXH5L1bDE"
+#GDRIVE_URL = "https://drive.google.com/uc?export=download&id=1quysauOgFKTcRdxpKITBmMNUXH5L1bDE"
 DATA_DIR = Path(__file__).parent / "data"
 PARQUET_PATH = DATA_DIR / "cached_dataset.parquet"
 
@@ -25,7 +26,8 @@ def ensure_data_exists():
 
     # Download from Google Drive
     with st.spinner("Downloading cached dataset (56 MB) from Google Drive…"):
-        response = requests.get(GDRIVE_URL, stream=True)
+        response = requests.get(GDRIVE_URL, stream=True, allow_redirects=True)
+
 
         if response.status_code != 200:
             raise RuntimeError(f"Failed to download dataset: HTTP {response.status_code}")
