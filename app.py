@@ -98,78 +98,23 @@ def add_psychro(df: pd.DataFrame) -> pd.DataFrame:
 # DATA LOADING  (XLSX → Parquet cache)
 # ==========================================
 
-@st.cache_data(show_spinner=False)
-def load_data_from_folder(data_dir: Path) -> pd.DataFrame:
+@st.cache_data(show_spinner=True)
+def load_cached_dataset(data_dir: Path) -> pd.DataFrame:
     """
-    Loads all XLSX files OR returns cached Parquet if it exists.
-    Extremely fast on re-load.
+    Streamlit Cloud optimised loader:
+    Always loads the precomputed Parquet file.
+    No XLSX processing.
     """
-
     parquet_path = data_dir / "cached_dataset.parquet"
-    hash_path    = data_dir / "file_hash.txt"
 
-    # -----------------------------------------------------------
-    # 1. If Parquet + hash exist → load instantly
-    # -----------------------------------------------------------
-    if parquet_path.exists() and hash_path.exists():
-        stored_hash = hash_path.read_text().strip()
+    if not parquet_path.exists():
+        raise FileNotFoundError(
+            f"cached_dataset.parquet not found at {parquet_path}. "
+            "Upload it to the repo under /data using Git LFS."
+        )
 
-        files = sorted(data_dir.glob("*.xlsx"))
-        file_names = ",".join([f"{f.name}-{f.stat().st_mtime}" for f in files])
-        current_hash = str(abs(hash(file_names)))
+    return pd.read_parquet(parquet_path)
 
-        if stored_hash == current_hash:
-            # Load Parquet instantly
-            return pd.read_parquet(parquet_path)
-
-    # -----------------------------------------------------------
-    # 2. ELSE: compute from XLSX and store cache
-    # -----------------------------------------------------------
-    files = sorted(data_dir.glob("*.xlsx"))
-    if not files:
-        raise FileNotFoundError(f"No .xlsx files found in {data_dir}")
-
-    total_files = len(files)
-
-    progress = st.progress(0)
-    status = st.empty()
-
-    dfs = []
-
-    for i, f in enumerate(files, start=1):
-        status.write(f"📄 Loading file {i} of {total_files}: **{f.name}**")
-        df = pd.read_excel(f)
-        df["source_file"] = f.name
-        dfs.append(df)
-        progress.progress(i / total_files)
-
-    status.write("🧮 Computing psychrometric metrics...")
-    data_all = pd.concat(dfs, ignore_index=True)
-    data_all = add_psychro(data_all)
-    progress.progress(0.85)
-
-    status.write("⏱️ Building RelativeMinutes...")
-    ts = "EOL_CAN.teststandTimestamp_millis"
-    if ts not in data_all.columns:
-        raise KeyError(f"Column {ts} not found in data!")
-
-    data_all["MinMillis"] = data_all.groupby(RUN_COL)[ts].transform("min")
-    data_all["RelativeMillis"] = data_all[ts] - data_all["MinMillis"]
-    data_all["RelativeMinutes"] = data_all["RelativeMillis"] / 60000
-    progress.progress(0.95)
-
-    status.write("💾 Saving Parquet cache...")
-
-    data_all.to_parquet(parquet_path, index=False)
-
-    file_names = ",".join([f"{f.name}-{f.stat().st_mtime}" for f in files])
-    current_hash = str(abs(hash(file_names)))
-    hash_path.write_text(current_hash)
-
-    progress.progress(1.0)
-    status.write("✅ Cached & ready!")
-
-    return data_all
 
 
 # ==========================================
