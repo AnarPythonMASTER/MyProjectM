@@ -663,12 +663,13 @@ def main():
     st.sidebar.markdown("Data folder: `./data`")
 
     data_dir = Path(__file__).parent / "data"
+
     if not data_dir.exists():
-        st.error(f"`data` folder not found next to app.py.\nCreate `{data_dir}` and put your .xlsx files there.")
+        st.error("`data` folder not found next to app.py.")
         return
 
-    with st.spinner("Loading data..."):
-        df = load_data_from_folder(data_dir)
+    with st.spinner("Loading cached dataset..."):
+        df = load_cached_dataset(data_dir)
 
     st.sidebar.success(f"Loaded {len(df)} rows, {df[RUN_COL].nunique()} runs.")
 
@@ -678,6 +679,7 @@ def main():
         render_raw_view(df)
     else:
         render_aligned_view(df)
+
 
 
 if __name__ == "__main__":
