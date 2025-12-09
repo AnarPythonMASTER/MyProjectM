@@ -98,19 +98,17 @@ def add_psychro(df: pd.DataFrame) -> pd.DataFrame:
 # DATA LOADING  (XLSX → Parquet cache)
 # ==========================================
 
-@st.cache_data(show_spinner=True)
-def load_cached_dataset(data_dir: Path) -> pd.DataFrame:
-    """
-    Streamlit Cloud optimised loader:
-    Always loads the precomputed Parquet file.
-    No XLSX processing.
-    """
+@st.cache_data(show_spinner=False)
+def load_cached_dataset():
+    # Absolute path in deployed Streamlit Cloud environment
+    base_dir = Path(__file__).resolve().parent
+    data_dir = base_dir / "data"
     parquet_path = data_dir / "cached_dataset.parquet"
 
     if not parquet_path.exists():
         raise FileNotFoundError(
             f"cached_dataset.parquet not found at {parquet_path}. "
-            "Upload it to the repo under /data using Git LFS."
+            f"Make sure the file exists in your GitHub repo inside /data."
         )
 
     return pd.read_parquet(parquet_path)
@@ -659,19 +657,8 @@ def render_aligned_view(df: pd.DataFrame):
 def main():
     st.set_page_config(page_title="Humidity / Temperature Alignment App", layout="wide")
 
-    st.sidebar.title("App Controls")
-    st.sidebar.markdown("Data folder: `./data`")
-
-    data_dir = Path(__file__).parent / "data"
-
-    if not data_dir.exists():
-        st.error("`data` folder not found next to app.py.")
-        return
-
-    with st.spinner("Loading cached dataset..."):
-        df = load_cached_dataset(data_dir)
-
-    st.sidebar.success(f"Loaded {len(df)} rows, {df[RUN_COL].nunique()} runs.")
+    df = load_cached_dataset()
+    st.sidebar.success(f"Loaded {len(df)} rows • {df['file_id'].nunique()} runs")
 
     view_mode = st.sidebar.radio("View mode", ["Raw Viewer", "Aligned Viewer"])
 
@@ -679,6 +666,7 @@ def main():
         render_raw_view(df)
     else:
         render_aligned_view(df)
+
 
 
 
