@@ -19,25 +19,29 @@ PARQUET_PATH = DATA_DIR / "cached_dataset.parquet"
 def ensure_data_exists():
     """Ensures cached_dataset.parquet exists locally.
        If missing (on Streamlit Cloud), download from Google Drive."""
-    DATA_DIR.mkdir(exist_ok=True)
+
+    # SAFEST way to create directory on Streamlit Cloud
+    if not DATA_DIR.is_dir():
+        try:
+            os.makedirs(DATA_DIR, exist_ok=True)
+        except Exception:
+            pass
 
     if PARQUET_PATH.exists():
         return PARQUET_PATH
 
     # Download from Google Drive
-    with st.spinner("Downloading cached dataset (56 MB) from Google Drive…"):
+    with st.spinner("Downloading cached dataset (56 MB) from Drive…"):
         response = requests.get(GDRIVE_URL, stream=True, allow_redirects=True)
-
-
-        if response.status_code != 200:
-            raise RuntimeError(f"Failed to download dataset: HTTP {response.status_code}")
+        response.raise_for_status()
 
         with open(PARQUET_PATH, "wb") as f:
-            for chunk in response.iter_content(chunk_size=10 * 1024 * 1024):
+            for chunk in response.iter_content(chunk_size=8 * 1024 * 1024):
                 if chunk:
                     f.write(chunk)
 
     return PARQUET_PATH
+
 
 
 # ==========================================
