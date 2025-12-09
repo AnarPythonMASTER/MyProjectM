@@ -640,6 +640,32 @@ def main():
     with st.spinner("Loading dataset…"):
         df = pd.read_parquet(parquet_file)
 
+    # ==========================================
+    # SAFETY FIX — ensure required columns exist
+    # ==========================================
+
+    # If file_id missing → create synthetic IDs
+    if RUN_COL not in df.columns:
+        st.warning("⚠ 'file_id' column missing — generating synthetic IDs.")
+        df[RUN_COL] = df.groupby(df.index // 1000).ngroup()
+
+    # If RelativeMinutes missing → compute it
+    if TIME_COL not in df.columns:
+
+        ts = "EOL_CAN.teststandTimestamp_millis"
+
+        if ts in df.columns:
+            st.info("Computing RelativeMinutes from timestamp column...")
+
+            df["MinMillis"] = df.groupby(RUN_COL)[ts].transform("min")
+            df["RelativeMillis"] = df[ts] - df["MinMillis"]
+            df["RelativeMinutes"] = df["RelativeMillis"] / 60000
+        else:
+            st.warning("⚠ No timestamp column — using RelativeMinutes = 0")
+            df["RelativeMinutes"] = 0.0
+
+    # ==========================================
+
     st.sidebar.success(f"Loaded {len(df):,} rows · {df[RUN_COL].nunique()} runs")
 
     mode = st.sidebar.radio("View mode:", ["Raw Viewer", "Aligned Viewer"])
@@ -648,6 +674,7 @@ def main():
         render_raw_view(df)
     else:
         render_aligned_view(df)
+
 
 
 if __name__ == "__main__":
