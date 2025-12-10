@@ -8,34 +8,26 @@ import os
 import tempfile
 
 # ==========================================
-# 1) ENSURE PARQUET DATA EXISTS (GOOGLE DRIVE FALLBACK)
+# 1) ENSURE PARQUET DATA EXISTS (GOOGLE DRIVE)
 # ==========================================
 
-# Direct download link for your Google Drive parquet
 GDRIVE_URL = "https://drive.google.com/uc?export=download&id=1quysauOgFKTcRdxpKITBmMNUXH5L1bDE"
 
-# Use a temp directory that is writable on Streamlit Cloud
-CACHE_DIR = Path(tempfile.gettempdir()) / "humidity_app_cache"
+# Use a temporary folder that is always writable on Streamlit Cloud
+CACHE_DIR = Path(tempfile.gettempdir()) / "humidity_app_cache_simple"
 PARQUET_PATH = CACHE_DIR / "cached_dataset.parquet"
 
 
 def ensure_data_exists() -> Path:
-    """
-    Ensure cached_dataset.parquet exists locally.
-    If missing (e.g. on Streamlit Cloud), download it from Google Drive.
-    """
-    # Create folder safely
+    """Download cached_dataset.parquet from Google Drive if it's not present."""
     os.makedirs(CACHE_DIR, exist_ok=True)
 
-    # If file already exists → use cached version
     if PARQUET_PATH.exists() and PARQUET_PATH.is_file():
         return PARQUET_PATH
 
-    # Download from Google Drive
-    with st.spinner("Downloading cached dataset (~56MB) from Google Drive…"):
+    with st.spinner("Downloading cached dataset (~56 MB) from Google Drive…"):
         r = requests.get(GDRIVE_URL, stream=True)
         r.raise_for_status()
-
         with open(PARQUET_PATH, "wb") as f:
             for chunk in r.iter_content(chunk_size=8 * 1024 * 1024):
                 if chunk:
@@ -66,20 +58,8 @@ FEATURES_ALL = [
 ]
 
 
-def df_signature(df: pd.DataFrame):
-    """
-    Lightweight, hashable signature for a DataFrame.
-    Used so Streamlit can cache expensive operations.
-    """
-    return (
-        len(df),
-        df[RUN_COL].nunique() if RUN_COL in df.columns else 0,
-        tuple(df.columns),
-    )
-
-
 # ==========================================
-# PSYCHROMETRIC HELPERS (kept for compatibility, but parquet already has them)
+# ALIGNMENT HELPERS (same logic as your .bat app)
 # ==========================================
 
 A, B = 17.62, 243.12
@@ -107,45 +87,6 @@ def absolute_humidity_gm3(Tc, RH):
     Tk = Tc + 273.15
     return 216.7 * (e / Tk)
 
-
-HUMI_CHANNELS = [
-    {
-        "name": "EOL_CAN.RemoteHumidity",
-        "t": "EOL_CAN.RemoteHumidity.temperature",
-        "rh": "EOL_CAN.RemoteHumidity.humidity",
-    }
-]
-
-
-def add_psychro(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Only used if derived columns are missing.
-    Your parquet already contains these, but we keep this as a fallback.
-    """
-    frames = []
-    for ch in HUMI_CHANNELS:
-        if ch["t"] in df.columns and ch["rh"] in df.columns:
-            T = pd.to_numeric(df[ch["t"]], errors="coerce")
-            RH = pd.to_numeric(df[ch["rh"]], errors="coerce")
-            base = ch["name"]
-
-            frames.append(
-                pd.DataFrame(
-                    {
-                        f"{base}.dewpoint_spread": T - dewpoint_c(T, RH),
-                        f"{base}.absolute_humidity": absolute_humidity_gm3(T, RH),
-                        f"{base}.vpd": vpd_hpa(T, RH),
-                    }
-                )
-            )
-    if frames:
-        df = pd.concat([df] + frames, axis=1)
-    return df
-
-
-# ==========================================
-# COVERAGE + ALIGNMENT HELPERS
-# ==========================================
 
 def compute_monotonicity_for_feature(df, feat, run_col, time_col):
     vals = (
@@ -206,10 +147,6 @@ def compute_crossing_time_single_run(t, v, align_value, monotonicity):
 def smooth_series(values, w):
     return pd.Series(values).rolling(w, center=True, min_periods=1).mean().to_numpy()
 
-
-# ==========================================
-# ALIGNMENT ENGINE (your original logic)
-# ==========================================
 
 def align_multi_feature(
     df,
@@ -340,42 +277,13 @@ def align_multi_feature(
 
 
 # ==========================================
-# CACHED ALIGNMENT WRAPPER
-# ==========================================
-
-@st.cache_data(show_spinner=False)
-def cached_alignment(
-    df: pd.DataFrame,
-    align_feature: str,
-    time_threshold: float,
-    start_min: float,
-    start_max: float,
-    bin_minutes: float,
-    manual_align_val: float | None,
-):
-    """
-    Cached wrapper around align_multi_feature.
-    """
-    return align_multi_feature(
-        df,
-        align_feature=align_feature,
-        feature_list=FEATURES_ALL,
-        time_threshold=time_threshold,
-        start_min=start_min,
-        start_max=start_max,
-        bin_minutes=bin_minutes,
-        align_value_manual=manual_align_val,
-    )
-
-
-# ==========================================
 # ALIGNED VIEW ONLY
 # ==========================================
 
 def render_aligned_view(df: pd.DataFrame):
     st.header("Aligned Viewer")
 
-    # Only keep alignment options whose columns actually exist
+    # Use the same options as your original app
     all_align_options = {
         "Humidity": FEATURE_HUMIDITY,
         "Temperature": FEATURE_TEMP,
@@ -383,6 +291,7 @@ def render_aligned_view(df: pd.DataFrame):
         "VPD": FEATURE_VPD,
         "Dewpoint Spread": FEATURE_DEWPOINT,
     }
+    # Only keep features that actually exist in the df
     align_options = {k: v for k, v in all_align_options.items() if v in df.columns}
 
     if not align_options:
@@ -418,15 +327,17 @@ def render_aligned_view(df: pd.DataFrame):
             value=float(starts.median())
         )
 
-    # Cached alignment
-    aligned_df, meta = cached_alignment(
+    # --- Alignment (no caching, direct call) ---
+    aligned_df, meta = align_multi_feature(
         df,
-        align_feature,
-        float(time_threshold),
-        float(start_min),
-        float(start_max),
-        float(bin_minutes),
-        float(manual_align_val) if use_manual else None,
+        align_feature=align_feature,
+        feature_list=FEATURES_ALL,
+        time_threshold=float(time_threshold),
+        start_min=float(start_min),
+        start_max=float(start_max),
+        bin_minutes=float(bin_minutes),
+        coverage_step=0.1,
+        align_value_manual=float(manual_align_val) if use_manual else None,
     )
 
     if aligned_df.empty:
@@ -490,10 +401,9 @@ def render_aligned_view(df: pd.DataFrame):
             "Smooth window", 1, 20, 3, key="aligned_smooth_window"
         )
 
-    # Apply run + cluster filter
     df_plot = aligned_df[
-        aligned_df[RUN_COL].isin(selected_runs) &
-        aligned_df["cluster"].isin(selected_clusters)
+        aligned_df[RUN_COL].isin(selected_runs)
+        & aligned_df["cluster"].isin(selected_clusters)
     ]
 
     if df_plot.empty:
@@ -502,7 +412,7 @@ def render_aligned_view(df: pd.DataFrame):
 
     fig = go.Figure()
 
-    # Raw aligned lines
+    # Individual aligned runs
     for fid, g in df_plot.groupby(RUN_COL):
         x = g["AlignedMinutes"].to_numpy()
         for feat in selected_features:
@@ -519,7 +429,7 @@ def render_aligned_view(df: pd.DataFrame):
                 legendgroup=feat
             ))
 
-    # Median + IQR band
+    # Median + IQR band per feature
     for feat in selected_features:
         grp = df_plot.groupby("AlignedMinutes")[feat]
         xs = grp.mean().index.to_numpy()
@@ -565,7 +475,7 @@ def render_aligned_view(df: pd.DataFrame):
 
 
 # ==========================================
-# MAIN (Aligned View only)
+# MAIN (Aligned view only)
 # ==========================================
 
 def main():
@@ -574,38 +484,20 @@ def main():
     st.sidebar.title("Aligned Humidity App")
     st.sidebar.markdown("Dataset is loaded from Google Drive (parquet cache).")
 
-    # Ensure dataset is available
     parquet_file = ensure_data_exists()
 
     with st.spinner("Loading dataset…"):
         df = pd.read_parquet(parquet_file)
 
-    # Ensure required columns exist
-    if RUN_COL not in df.columns:
-        st.error(f"Required column `{RUN_COL}` is missing in the dataset.")
-        st.stop()
-
-    if TIME_COL not in df.columns:
-        # Try to build RelativeMinutes from timestamp if available
-        ts = "EOL_CAN.teststandTimestamp_millis"
-        if ts in df.columns:
-            st.info("Computing RelativeMinutes from timestamp column...")
-            df["MinMillis"] = df.groupby(RUN_COL)[ts].transform("min")
-            df["RelativeMillis"] = df[ts] - df["MinMillis"]
-            df["RelativeMinutes"] = df["RelativeMillis"] / 60000
-        else:
-            st.error(f"Required column `{TIME_COL}` is missing and no timestamp found.")
-            st.stop()
-
-    # If psychro columns are missing (unlikely), compute them
-    missing_psychro = any(col not in df.columns for col in [FEATURE_ABS_HUMI, FEATURE_VPD, FEATURE_DEWPOINT])
-    if missing_psychro:
-        df = add_psychro(df)
+    # Basic safety checks
+    if RUN_COL not in df.columns or TIME_COL not in df.columns:
+        st.error(f"Dataset must contain columns `{RUN_COL}` and `{TIME_COL}`.")
+        st.write("Columns available:", list(df.columns))
+        return
 
     st.sidebar.success(f"Loaded {len(df):,} rows · {df[RUN_COL].nunique()} runs")
     st.sidebar.markdown("**View:** Aligned")
 
-    # Only aligned view (no raw tab)
     render_aligned_view(df)
 
 
