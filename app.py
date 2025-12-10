@@ -11,9 +11,9 @@ import os
 # ==========================================
 GDRIVE_URL = "https://drive.google.com/uc?export=download&confirm=1&id=1quysauOgFKTcRdxpKITBmMNUXH5L1bDE"
 
-#GDRIVE_URL = "https://drive.google.com/uc?export=download&id=1quysauOgFKTcRdxpKITBmMNUXH5L1bDE"
 DATA_DIR = Path(__file__).parent / "dataset_cache"
 PARQUET_PATH = DATA_DIR / "cached_dataset.parquet"
+
 
 def ensure_data_exists():
     """Ensures cached_dataset.parquet exists locally or downloads it."""
@@ -30,7 +30,7 @@ def ensure_data_exists():
         return PARQUET_PATH
 
     # Download from Google Drive
-    with st.spinner("Downloading cached dataset (56MB)…"):
+    with st.spinner("Downloading cached dataset (≈56MB) from Google Drive…"):
         r = requests.get(GDRIVE_URL, stream=True)
         r.raise_for_status()
 
@@ -40,8 +40,6 @@ def ensure_data_exists():
                     f.write(chunk)
 
     return PARQUET_PATH
-
-
 
 
 # ==========================================
@@ -67,12 +65,19 @@ FEATURES_ALL = [
 
 
 def df_signature(df: pd.DataFrame):
-    """Small signature for caching."""
-    return (len(df), df[RUN_COL].nunique() if RUN_COL in df.columns else 0, tuple(df.columns))
+    """
+    Lightweight, hashable signature for a DataFrame.
+    Used so Streamlit can cache expensive operations.
+    """
+    return (
+        len(df),
+        df[RUN_COL].nunique() if RUN_COL in df.columns else 0,
+        tuple(df.columns),
+    )
 
 
 # ==========================================
-# PSYCHROMETRIC HELPERS
+# PSYCHROMETRIC HELPERS (kept for safety)
 # ==========================================
 
 A, B = 17.62, 243.12
@@ -111,6 +116,7 @@ HUMI_CHANNELS = [
 
 
 def add_psychro(df: pd.DataFrame) -> pd.DataFrame:
+    """Only used if parquet does NOT already contain these columns."""
     frames = []
     for ch in HUMI_CHANNELS:
         if ch["t"] in df.columns and ch["rh"] in df.columns:
@@ -128,17 +134,27 @@ def add_psychro(df: pd.DataFrame) -> pd.DataFrame:
                 )
             )
     if frames:
-        df = pd.concat([df] + frames, axis=1)
+        extra = pd.concat(frames, axis=1)
+        # avoid duplicate columns if parquet already has them
+        for col in extra.columns:
+            if col not in df.columns:
+                df[col] = extra[col]
     return df
 
 
 # ==========================================
-# COVERAGE + ALIGNMENT HELPERS
+# ALIGNMENT HELPERS (base functions)
 # ==========================================
 
 def compute_monotonicity_for_feature(df, feat, run_col, time_col):
-    vals = df.sort_values([run_col, time_col]).groupby(run_col)[feat].diff()
-    return "up" if vals.dropna().mean() > 0 else "down"
+    vals = (
+        df.sort_values([run_col, time_col])
+          .groupby(run_col)[feat]
+          .diff()
+    )
+    if vals.dropna().mean() > 0:
+        return "up"
+    return "down"
 
 
 def compute_coverage(min_series, max_series, step=0.1):
@@ -190,15 +206,8 @@ def smooth_series(values, w):
     return pd.Series(values).rolling(w, center=True, min_periods=1).mean().to_numpy()
 
 
-# FULL ALIGNMENT FUNCTION (unchanged)
-# ---------------------------------------------------
-# ⚠️ This is identical to your original code
-# ---------------------------------------------------
-
-# DUE TO LENGTH LIMITS — I WILL CONTINUE IN THE NEXT MESSAGE  
 # ==========================================
-# ALIGNMENT ENGINE
-# (same as your corrected version)
+# ALIGNMENT ENGINE (same as your working version)
 # ==========================================
 
 def align_multi_feature(
@@ -330,87 +339,120 @@ def align_multi_feature(
 
 
 # ==========================================
-# CACHED FUNCTIONS
+# CACHED WRAPPERS (same pattern as your local app)
 # ==========================================
 
 @st.cache_data(show_spinner=False)
-def cached_alignment_wrapper(df_sig, df, *args):
-    return align_multi_feature(df, *args)
-
-
-@st.cache_data(show_spinner=False)
-def cached_raw_binning_wrapper(df_sig, df_sel, selected_features, bin_minutes):
+def cached_raw_binning(df_sig, df_sel, selected_features, bin_minutes):
     df_sel = df_sel.copy()
     df_sel["_bin"] = np.floor(df_sel[TIME_COL] / bin_minutes) * bin_minutes
     agg = {f: "mean" for f in selected_features}
     return (
         df_sel.groupby([RUN_COL, "_bin"], as_index=False)
-        .agg(agg)
-        .rename(columns={"_bin": "BinnedMinutes"})
+              .agg(agg)
+              .rename(columns={"_bin": "BinnedMinutes"})
+    )
+
+
+@st.cache_data(show_spinner=False)
+def cached_alignment(df_sig, df, align_feature, time_threshold,
+                     start_min, start_max, bin_minutes, manual_align):
+    return align_multi_feature(
+        df,
+        align_feature=align_feature,
+        feature_list=FEATURES_ALL,
+        time_threshold=time_threshold,
+        start_min=start_min,
+        start_max=start_max,
+        bin_minutes=bin_minutes,
+        align_value_manual=manual_align,
     )
 
 
 # ==========================================
-# RAW VIEW
+# RAW VIEW RENDERER
 # ==========================================
 
-def render_raw_view(df):
-    st.header("RAW Viewer")
+def render_raw_view(df: pd.DataFrame):
+    st.header("RAW Viewer (Filtered + Binned)")
 
     run_ids = sorted(df[RUN_COL].unique())
 
-    # Persist run selection
     if "raw_selected_runs" not in st.session_state:
-        st.session_state.raw_selected_runs = run_ids
+        st.session_state["raw_selected_runs"] = run_ids
 
-    st.session_state.raw_selected_runs = [
-        r for r in st.session_state.raw_selected_runs if r in run_ids
+    st.session_state["raw_selected_runs"] = [
+        r for r in st.session_state["raw_selected_runs"] if r in run_ids
     ] or run_ids
 
     colA, colB, _ = st.columns([1, 1, 4])
     with colA:
         if st.button("Select ALL runs"):
-            st.session_state.raw_selected_runs = run_ids
+            st.session_state["raw_selected_runs"] = run_ids
     with colB:
         if st.button("Clear selection"):
-            st.session_state.raw_selected_runs = []
+            st.session_state["raw_selected_runs"] = []
 
     selected_runs = st.multiselect(
-        "Runs",
-        run_ids,
+        "Select runs",
+        options=run_ids,
         key="raw_selected_runs"
     )
 
-    if not selected_runs:
-        st.warning("No runs selected.")
+    if len(selected_runs) == 0:
+        st.warning("⚠ No runs selected — please select at least one run.")
         return
 
     selected_features = st.multiselect(
-        "Features",
+        "Select features",
         FEATURES_ALL,
         default=[FEATURE_HUMIDITY],
-        key="raw_features"
+        key="raw_selected_features",
     )
+
+    if not selected_features:
+        st.warning("Please select at least one feature.")
+        return
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        start_min = st.number_input("Start Min", value=float(df[FEATURE_HUMIDITY].min()))
+        start_min = st.number_input(
+            "Start Min (filter feature)",
+            value=float(df[FEATURE_HUMIDITY].min()),
+            key="raw_start_min",
+        )
     with col2:
-        start_max = st.number_input("Start Max", value=float(df[FEATURE_HUMIDITY].max()))
+        start_max = st.number_input(
+            "Start Max (filter feature)",
+            value=float(df[FEATURE_HUMIDITY].max()),
+            key="raw_start_max",
+        )
     with col3:
-        time_threshold = st.number_input("Min duration (min)", value=0.0)
+        time_threshold = st.number_input(
+            "Min duration (min)", value=0.0, key="raw_time_threshold"
+        )
 
-    col4, col5 = st.columns(2)
-    with col4:
-        bin_minutes = st.slider("Bin size", 0.1, 10.0, 2.0, 0.1)
-    with col5:
-        smooth_on = st.checkbox("Smooth", False)
-    smooth_window = st.slider("Smooth window", 1, 20, 3)
+    colb1, colb2, colb3 = st.columns(3)
+    with colb1:
+        bin_minutes = st.slider(
+            "Bin size (minutes)", 0.1, 10.0, 2.0, step=0.1, key="raw_bin"
+        )
+    with colb2:
+        smooth_on = st.checkbox("Smooth", value=False, key="raw_smooth")
+    with colb3:
+        smooth_window = st.slider(
+            "Smooth window", 1, 20, 3, key="raw_smooth_window"
+        )
 
     df_sel = df[df[RUN_COL].isin(selected_runs)].copy()
 
-    # Filter runs
-    starts = df_sel.sort_values([RUN_COL, TIME_COL]).groupby(RUN_COL)[selected_features[0]].first()
+    filter_feat = selected_features[0]
+    starts = (
+        df_sel.sort_values([RUN_COL, TIME_COL])
+             .groupby(RUN_COL)[filter_feat]
+             .first()
+    )
+
     valid = set(selected_runs)
     valid = valid.intersection(starts[starts >= start_min].index)
     valid = valid.intersection(starts[starts <= start_max].index)
@@ -420,14 +462,16 @@ def render_raw_view(df):
         valid = valid.intersection(max_t[max_t >= time_threshold].index)
 
     valid = list(valid)
+
     if not valid:
-        st.warning("No runs passed filters.")
+        st.warning("No runs passed the filters.")
         return
 
-    df_sel = df_sel[df_sel[RUN_COL].isin(valid)]
+    df_sel = df_sel[df_sel[RUN_COL].isin(valid)].copy()
 
+    # Cached binning
     sig = df_signature(df_sel)
-    df_binned = cached_raw_binning_wrapper(sig, df_sel, tuple(selected_features), float(bin_minutes))
+    df_binned = cached_raw_binning(sig, df_sel, tuple(selected_features), float(bin_minutes))
 
     fig = go.Figure()
 
@@ -437,30 +481,32 @@ def render_raw_view(df):
             y = g[feat].to_numpy()
             if smooth_on:
                 y = smooth_series(y, smooth_window)
-
             fig.add_trace(go.Scattergl(
-                x=t, y=y,
+                x=t,
+                y=y,
                 mode="lines",
                 opacity=0.5,
                 line=dict(width=1),
-                name=f"{fid} — {feat}"
+                name=f"{fid} — {feat}",
             ))
 
     fig.update_layout(
-        title=f"RAW Viewer — {len(valid)} runs",
+        title=f"RAW Viewer — {len(valid)} filtered runs",
         template="plotly_dark",
+        xaxis_title="Time (min)",
+        yaxis_title="Value",
+        hovermode="closest",
         height=700,
-        hovermode="closest"
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
 
 # ==========================================
-# ALIGNED VIEW
+# ALIGNED VIEW RENDERER
 # ==========================================
 
-def render_aligned_view(df):
+def render_aligned_view(df: pd.DataFrame):
     st.header("Aligned Viewer")
 
     align_options = {
@@ -476,122 +522,127 @@ def render_aligned_view(df):
 
     df_sorted = df.sort_values([RUN_COL, TIME_COL])
     starts = df_sorted.groupby(RUN_COL)[align_feature].first()
+    start_min_default = float(starts.min())
+    start_max_default = float(starts.max())
 
     col1, col2, col3 = st.columns(3)
     with col1:
         time_threshold = st.number_input("Min duration (min)", value=35.0)
     with col2:
-        start_min = st.number_input("Start Min", value=float(starts.min()))
+        start_min = st.number_input("Start Min", value=start_min_default)
     with col3:
-        start_max = st.number_input("Start Max", value=float(starts.max()))
+        start_max = st.number_input("Start Max", value=start_max_default)
 
     col4, col5, col6 = st.columns(3)
     with col4:
-        bin_minutes = st.slider("Bin size (minutes)", 0.1, 10.0, 2.0)
+        bin_minutes = st.slider("Bin size (minutes)", 0.1, 10.0, 2.0, 0.1)
     with col5:
-        use_manual = st.checkbox("Use manual align value?")
+        use_manual = st.checkbox("Use manual align value?", value=False)
     with col6:
-        manual_align_val = st.number_input("Manual value", value=float(starts.median()))
-
-    sig = df_signature(df)
-    try:
-        aligned_df, meta = cached_alignment_wrapper(
-            sig,
-            df,
-            align_feature,
-            FEATURES_ALL,
-            RUN_COL,
-            TIME_COL,
-            float(time_threshold),
-            float(start_min),
-            float(start_max),
-            float(bin_minutes),
-            0.1,
-            float(manual_align_val) if use_manual else None,
+        manual_align_val = st.number_input(
+            "Manual align value",
+            value=float(starts.median())
         )
 
-    except Exception as e:
-        st.error("🔥 Alignment failed!")
-        st.exception(e)
-        st.stop()
-
-
+    sig = df_signature(df)
+    aligned_df, meta = cached_alignment(
+        sig,
+        df,
+        align_feature,
+        float(time_threshold),
+        float(start_min),
+        float(start_max),
+        float(bin_minutes),
+        float(manual_align_val) if use_manual else None,
+    )
 
     if aligned_df.empty:
-        st.warning("No data after alignment.")
+        st.warning("No data after alignment (check filters).")
         return
+
+    align_val = meta.get("align_value")
+    align_str = f"{align_val:.3f}" if align_val is not None else "None"
 
     st.markdown(f"""
     **Align feature:** `{align_feature}`  
     **Monotonicity:** `{meta['monotonicity']}`  
-    **Align value:** `{meta['align_value']}`  
+    **Align value used:** `{align_str}`  
     **Consensus interval:** `{meta['consensus_interval']}`  
     **Max coverage:** `{meta['max_coverage']}`  
     """)
 
-    # Run selection
     run_ids = sorted(aligned_df[RUN_COL].unique())
 
     if "aligned_selected_runs" not in st.session_state:
-        st.session_state.aligned_selected_runs = run_ids
+        st.session_state["aligned_selected_runs"] = run_ids
 
-    st.session_state.aligned_selected_runs = [
-        r for r in st.session_state.aligned_selected_runs if r in run_ids
+    st.session_state["aligned_selected_runs"] = [
+        r for r in st.session_state["aligned_selected_runs"] if r in run_ids
     ] or run_ids
 
-    colA, colB, _ = st.columns([1, 1, 4])
-    with colA:
+    colR1, colR2, _ = st.columns([1, 1, 4])
+    with colR1:
         if st.button("Select ALL aligned runs"):
-            st.session_state.aligned_selected_runs = run_ids
-    with colB:
+            st.session_state["aligned_selected_runs"] = run_ids
+    with colR2:
         if st.button("Clear aligned selection"):
-            st.session_state.aligned_selected_runs = []
+            st.session_state["aligned_selected_runs"] = []
 
     selected_runs = st.multiselect(
-        "Select runs",
-        run_ids,
+        "Select runs (aligned)",
+        options=run_ids,
         key="aligned_selected_runs"
     )
 
+    cluster_options = ["deep", "medium", "outside"]
     selected_clusters = st.multiselect(
         "Clusters",
-        ["deep", "medium", "outside"],
-        default=["deep", "medium"]
+        cluster_options,
+        default=["deep", "medium"],
+        key="aligned_clusters"
     )
 
     selected_features = st.multiselect(
-        "Plot features",
+        "Features to plot",
         FEATURES_ALL,
-        default=[align_feature]
+        default=[align_feature],
+        key="aligned_features"
     )
 
-    smooth_on = st.checkbox("Smooth curves?", value=False)
-    smooth_window = st.slider("Smooth window", 1, 20, 3)
+    col7, col8 = st.columns(2)
+    with col7:
+        smooth_on = st.checkbox("Smooth", value=False, key="aligned_smooth")
+    with col8:
+        smooth_window = st.slider(
+            "Smooth window", 1, 20, 3, key="aligned_smooth_window"
+        )
 
     df_plot = aligned_df[
-        aligned_df[RUN_COL].isin(selected_runs)
-        & aligned_df["cluster"].isin(selected_clusters)
+        aligned_df[RUN_COL].isin(selected_runs) &
+        aligned_df["cluster"].isin(selected_clusters)
     ]
 
     if df_plot.empty:
-        st.warning("Nothing to plot.")
+        st.warning("No data after run/cluster selection.")
         return
 
     fig = go.Figure()
 
+    # Raw aligned lines
     for fid, g in df_plot.groupby(RUN_COL):
         x = g["AlignedMinutes"].to_numpy()
         for feat in selected_features:
             y = g[feat].to_numpy()
             if smooth_on:
                 y = smooth_series(y, smooth_window)
-
             fig.add_trace(go.Scattergl(
-                x=x, y=y,
+                x=x,
+                y=y,
                 mode="lines",
-                opacity=0.35,
                 line=dict(width=1),
+                opacity=0.35,
                 name=f"{fid} — {feat}",
+                legendgroup=feat
             ))
 
     # Median + IQR band
@@ -599,7 +650,7 @@ def render_aligned_view(df):
         grp = df_plot.groupby("AlignedMinutes")[feat]
         xs = grp.mean().index.to_numpy()
         q25 = grp.quantile(0.25).to_numpy()
-        med = grp.quantile(0.5).to_numpy()
+        med = grp.quantile(0.50).to_numpy()
         q75 = grp.quantile(0.75).to_numpy()
 
         if smooth_on:
@@ -615,6 +666,7 @@ def render_aligned_view(df):
             line=dict(width=0),
             hoverinfo="skip",
             showlegend=False,
+            legendgroup=feat,
         ))
 
         fig.add_trace(go.Scatter(
@@ -623,74 +675,66 @@ def render_aligned_view(df):
             mode="lines",
             line=dict(width=3),
             name=f"{feat} median",
+            legendgroup=feat,
         ))
 
     fig.update_layout(
-        title=f"Aligned by {align_label}",
+        title=f"Aligned by {align_label} — {df_plot[RUN_COL].nunique()} runs",
         template="plotly_dark",
+        xaxis_title="Aligned Minutes",
+        yaxis_title="Value",
+        hovermode="closest",
         height=700,
-        hovermode="closest"
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
 
 # ==========================================
-# MAIN APP
+# MAIN
 # ==========================================
 
 def main():
-    st.set_page_config(page_title="Humidity Alignment App", layout="wide")
+    st.set_page_config(page_title="Humidity / Temperature Alignment App", layout="wide")
 
-    st.sidebar.header("Humidity App")
-    st.sidebar.write("Data is loaded from Google Drive if missing.")
+    st.sidebar.title("App Controls")
+    st.sidebar.markdown("Dataset is loaded from Google Drive (cached as Parquet).")
 
-    # Ensure dataset is available
+    # Ensure dataset exists (download if needed)
     parquet_file = ensure_data_exists()
 
     with st.spinner("Loading dataset…"):
         df = pd.read_parquet(parquet_file)
-        st.write("Columns:", df.columns.tolist())
 
-    df = add_psychro(df)   # <—— ADD THIS
+    # Safety: if psychro columns missing (older parquet or future reuse)
+    if not {FEATURE_ABS_HUMI, FEATURE_VPD, FEATURE_DEWPOINT}.issubset(df.columns):
+        df = add_psychro(df)
 
-    # ==========================================
-    # SAFETY FIX — ensure required columns exist
-    # ==========================================
-
-    # If file_id missing → create synthetic IDs
+    # SAFETY: ensure RUN_COL and TIME_COL exist
     if RUN_COL not in df.columns:
         st.warning("⚠ 'file_id' column missing — generating synthetic IDs.")
         df[RUN_COL] = df.groupby(df.index // 1000).ngroup()
 
-    # If RelativeMinutes missing → compute it
     if TIME_COL not in df.columns:
-
         ts = "EOL_CAN.teststandTimestamp_millis"
-
         if ts in df.columns:
-            st.info("Computing RelativeMinutes from timestamp column...")
-
+            st.info("Computing RelativeMinutes from timestamp column…")
             df["MinMillis"] = df.groupby(RUN_COL)[ts].transform("min")
             df["RelativeMillis"] = df[ts] - df["MinMillis"]
             df["RelativeMinutes"] = df["RelativeMillis"] / 60000
         else:
-            st.warning("⚠ No timestamp column — using RelativeMinutes = 0")
+            st.warning("⚠ No timestamp column — setting RelativeMinutes = 0.")
             df["RelativeMinutes"] = 0.0
-
-    # ==========================================
 
     st.sidebar.success(f"Loaded {len(df):,} rows · {df[RUN_COL].nunique()} runs")
 
-    mode = st.sidebar.radio("View mode:", ["Raw Viewer", "Aligned Viewer"])
+    view_mode = st.sidebar.radio("View mode", ["Raw Viewer", "Aligned Viewer"])
 
-    if mode == "Raw Viewer":
+    if view_mode == "Raw Viewer":
         render_raw_view(df)
     else:
         render_aligned_view(df)
 
 
-
 if __name__ == "__main__":
     main()
-
