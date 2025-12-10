@@ -499,12 +499,17 @@ def render_aligned_view(df):
         sig,
         df,
         align_feature,
-        float(time_threshold),
-        float(start_min),
-        float(start_max),
-        float(bin_minutes),
-        float(manual_align_val) if use_manual else None,
+        FEATURES_ALL,                     # features to compute
+        RUN_COL,                          # run column
+        TIME_COL,                         # time column
+        float(time_threshold),            # minimum duration
+        float(start_min),                 # start_min
+        float(start_max),                 # start_max
+        float(bin_minutes),               # bin size
+        0.1,                              # coverage step
+        float(manual_align_val) if use_manual else None,  # optional manual align
     )
+
 
     if aligned_df.empty:
         st.warning("No data after alignment.")
