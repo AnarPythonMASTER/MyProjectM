@@ -494,21 +494,27 @@ def render_aligned_view(df):
         manual_align_val = st.number_input("Manual value", value=float(starts.median()))
 
     sig = df_signature(df)
+    try:
+        aligned_df, meta = cached_alignment_wrapper(
+            sig,
+            df,
+            align_feature,
+            FEATURES_ALL,
+            RUN_COL,
+            TIME_COL,
+            float(time_threshold),
+            float(start_min),
+            float(start_max),
+            float(bin_minutes),
+            0.1,
+            float(manual_align_val) if use_manual else None,
+        )
 
-    aligned_df, meta = cached_alignment_wrapper(
-        sig,
-        df,
-        align_feature,
-        FEATURES_ALL,                     # features to compute
-        RUN_COL,                          # run column
-        TIME_COL,                         # time column
-        float(time_threshold),            # minimum duration
-        float(start_min),                 # start_min
-        float(start_max),                 # start_max
-        float(bin_minutes),               # bin size
-        0.1,                              # coverage step
-        float(manual_align_val) if use_manual else None,  # optional manual align
-    )
+    except Exception as e:
+        st.error("🔥 Alignment failed!")
+        st.exception(e)
+        st.stop()
+
 
 
     if aligned_df.empty:
