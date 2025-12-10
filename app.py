@@ -650,6 +650,8 @@ def main():
 
     with st.spinner("Loading dataset…"):
         df = pd.read_parquet(parquet_file)
+        st.write("Columns:", df.columns.tolist())
+
     df = add_psychro(df)   # <—— ADD THIS
 
     # ==========================================
