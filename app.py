@@ -644,6 +644,7 @@ def main():
 
     with st.spinner("Loading dataset…"):
         df = pd.read_parquet(parquet_file)
+    df = add_psychro(df)   # <—— ADD THIS
 
     # ==========================================
     # SAFETY FIX — ensure required columns exist
